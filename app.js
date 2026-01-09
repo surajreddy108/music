@@ -1,299 +1,450 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Volume2, List, Search } from 'lucide-react';
-
-const MusicPlayer = () => {
-  const [playlist, setPlaylist] = useState([]);
-  const [currentTrack, setCurrentTrack] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(1);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [showPlaylist, setShowPlaylist] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  
-  const audioRef = useRef(null);
-
-  useEffect(() => {
-    fetchPlaylist();
-  }, []);
-
-  const fetchPlaylist = async () => {
-    try {
-      setLoading(true);
-      const sheetId = '1CcDKyg-_JaiKHyvLZv-zn-g2O8b-8wWC-OP9fiaS0_M';
-      const gid = '551203411';
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-      
-      const response = await fetch(csvUrl);
-      const text = await response.text();
-      
-      const lines = text.split('\n');
-      const tracks = [];
-      
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
+class PrabhupadaVaniPlayer {
+    constructor() {
+        this.lectures = window.lecturesData || [];
+        this.currentLecture = null;
+        this.currentTab = 'all';
+        this.favorites = new Set();
+        this.currentAudio = null;
+        this.isPlaying = false;
+        this.repeatMode = false;
+        this.filteredLectures = [...this.lectures];
         
-        const match = line.match(/^"?([^"]*?)"?,\s*"?([^"]*?)"?(?:,|$)/);
-        if (match) {
-          const title = match[1].trim();
-          const link = match[2].trim();
-          
-          if (title && link && link.startsWith('http')) {
-            tracks.push({ title, link });
-          }
+        this.init();
+    }
+
+    init() {
+        this.loadFavorites();
+        this.setupEventListeners();
+        this.populateFilters();
+        this.renderAllLectures();
+        this.updateFavoritesList();
+    }
+
+    setupEventListeners() {
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', (e) => this.switchTab(e.target.dataset.tab));
+        });
+
+        // Search functionality
+        document.getElementById('search-input').addEventListener('input', (e) => {
+            this.filterLectures(e.target.value);
+        });
+
+        // Year filter
+        document.getElementById('year-filter').addEventListener('change', (e) => {
+            this.filterLectures();
+        });
+
+        // Location filter
+        document.getElementById('location-filter').addEventListener('change', (e) => {
+            this.filterLectures();
+        });
+
+        // Shuffle button
+        document.getElementById('shuffle-btn').addEventListener('click', () => {
+            this.shufflePlaylist();
+        });
+
+        // Player controls
+        const audioPlayer = document.getElementById('audio-player');
+        
+        document.getElementById('play-pause-btn').addEventListener('click', () => {
+            this.togglePlayPause();
+        });
+
+        document.getElementById('prev-btn').addEventListener('click', () => {
+            this.playPrevious();
+        });
+
+        document.getElementById('next-btn').addEventListener('click', () => {
+            this.playNext();
+        });
+
+        document.getElementById('repeat-btn').addEventListener('click', () => {
+            this.toggleRepeat();
+        });
+
+        document.getElementById('volume-slider').addEventListener('input', (e) => {
+            audioPlayer.volume = e.target.value;
+        });
+
+        // Audio events
+        audioPlayer.addEventListener('ended', () => {
+            if (this.repeatMode) {
+                audioPlayer.currentTime = 0;
+                audioPlayer.play();
+            } else {
+                this.playNext();
+            }
+        });
+
+        audioPlayer.addEventListener('play', () => {
+            this.isPlaying = true;
+            this.updatePlayButton();
+        });
+
+        audioPlayer.addEventListener('pause', () => {
+            this.isPlaying = false;
+            this.updatePlayButton();
+        });
+    }
+
+    populateFilters() {
+        const yearFilter = document.getElementById('year-filter');
+        const locationFilter = document.getElementById('location-filter');
+        
+        // Get unique years
+        const years = [...new Set(this.lectures.map(l => {
+            const date = new Date(l.date);
+            return date.getFullYear();
+        }))].sort((a, b) => b - a);
+        
+        years.forEach(year => {
+            const option = document.createElement('option');
+            option.value = year;
+            option.textContent = year;
+            yearFilter.appendChild(option);
+        });
+
+        // Get unique locations
+        const locations = [...new Set(this.lectures.map(l => l.location).filter(Boolean))].sort();
+        
+        locations.forEach(location => {
+            const option = document.createElement('option');
+            option.value = location;
+            option.textContent = location;
+            locationFilter.appendChild(option);
+        });
+    }
+
+    switchTab(tabName) {
+        this.currentTab = tabName;
+        
+        // Update tab UI
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.tab === tabName);
+        });
+        
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.toggle('active', content.id === `${tabName}-content`);
+        });
+
+        // Render appropriate content
+        switch(tabName) {
+            case 'all':
+                this.renderLectures(this.filteredLectures, 'all-list');
+                break;
+            case 'bhagavad-gita':
+                const bgLectures = this.filteredLectures.filter(l => 
+                    l.title.toLowerCase().includes('bhagavad-gita')
+                );
+                this.renderLectures(bgLectures, 'bhagavad-gita-list');
+                break;
+            case 'srimad-bhagavatam':
+                const sbLectures = this.filteredLectures.filter(l => 
+                    l.title.toLowerCase().includes('srimad-bhagavatam') || 
+                    l.title.toLowerCase().includes('bhagavatam')
+                );
+                this.renderLectures(sbLectures, 'srimad-bhagavatam-list');
+                break;
+            case 'caitanya-caritamrta':
+                const ccLectures = this.filteredLectures.filter(l => 
+                    l.title.toLowerCase().includes('caitanya-caritamrta') ||
+                    l.title.toLowerCase().includes('caitanya')
+                );
+                this.renderLectures(ccLectures, 'caitanya-caritamrta-list');
+                break;
+            case 'other':
+                const otherLectures = this.filteredLectures.filter(l => 
+                    !l.title.toLowerCase().includes('bhagavad-gita') &&
+                    !l.title.toLowerCase().includes('bhagavatam') &&
+                    !l.title.toLowerCase().includes('caitanya-caritamrta') &&
+                    !l.title.toLowerCase().includes('caitanya')
+                );
+                this.renderLectures(otherLectures, 'other-list');
+                break;
+            case 'favorites':
+                this.updateFavoritesList();
+                break;
         }
-      }
-      
-      setPlaylist(tracks);
-      setLoading(false);
-    } catch (err) {
-      setError('Failed to load playlist. Please check your internet connection.');
-      setLoading(false);
     }
-  };
 
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const updateTime = () => setCurrentTime(audio.currentTime);
-    const updateDuration = () => setDuration(audio.duration);
-    const handleEnded = () => playNext();
-
-    audio.addEventListener('timeupdate', updateTime);
-    audio.addEventListener('loadedmetadata', updateDuration);
-    audio.addEventListener('ended', handleEnded);
-
-    return () => {
-      audio.removeEventListener('timeupdate', updateTime);
-      audio.removeEventListener('loadedmetadata', updateDuration);
-      audio.removeEventListener('ended', handleEnded);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = volume;
+    filterLectures(searchTerm = '') {
+        const yearFilter = document.getElementById('year-filter').value;
+        const locationFilter = document.getElementById('location-filter').value;
+        
+        this.filteredLectures = this.lectures.filter(lecture => {
+            // Search term filter
+            if (searchTerm) {
+                const searchLower = searchTerm.toLowerCase();
+                const matchesSearch = lecture.title.toLowerCase().includes(searchLower) ||
+                                     lecture.location.toLowerCase().includes(searchLower) ||
+                                     lecture.date.includes(searchTerm);
+                if (!matchesSearch) return false;
+            }
+            
+            // Year filter
+            if (yearFilter) {
+                const lectureYear = new Date(lecture.date).getFullYear();
+                if (lectureYear.toString() !== yearFilter) return false;
+            }
+            
+            // Location filter
+            if (locationFilter && lecture.location !== locationFilter) {
+                return false;
+            }
+            
+            return true;
+        });
+        
+        this.switchTab(this.currentTab);
     }
-  }, [volume]);
 
-  const togglePlay = () => {
-    if (audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-      } else {
-        audioRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
+    shufflePlaylist() {
+        const shuffled = [...this.filteredLectures];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        
+        if (shuffled.length > 0) {
+            this.playLecture(shuffled[0]);
+        }
+        
+        this.renderLectures(shuffled, `${this.currentTab}-list`);
     }
-  };
 
-  const playTrack = (index) => {
-    setCurrentTrack(index);
-    setIsPlaying(false);
-    setTimeout(() => {
-      if (audioRef.current) {
-        audioRef.current.load();
-        audioRef.current.play();
-        setIsPlaying(true);
-      }
-    }, 100);
-  };
-
-  const playNext = () => {
-    const nextTrack = (currentTrack + 1) % playlist.length;
-    playTrack(nextTrack);
-  };
-
-  const playPrevious = () => {
-    const prevTrack = currentTrack === 0 ? playlist.length - 1 : currentTrack - 1;
-    playTrack(prevTrack);
-  };
-
-  const handleSeek = (e) => {
-    const seekTime = (e.target.value / 100) * duration;
-    audioRef.current.currentTime = seekTime;
-    setCurrentTime(seekTime);
-  };
-
-  const formatTime = (seconds) => {
-    if (isNaN(seconds)) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const filteredPlaylist = playlist.filter(track =>
-    track.title.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-orange-600 mx-auto mb-4"></div>
-          <p className="text-orange-800 text-lg">Loading spiritual teachings...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex items-center justify-center">
-        <div className="bg-white p-8 rounded-lg shadow-lg max-w-md">
-          <p className="text-red-600 mb-4">{error}</p>
-          <button 
-            onClick={fetchPlaylist}
-            className="bg-orange-600 text-white px-6 py-2 rounded-lg hover:bg-orange-700 transition"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 p-4">
-      <div className="max-w-6xl mx-auto">
-        <header className="text-center mb-8 pt-8">
-          <h1 className="text-4xl font-bold text-orange-800 mb-2">
-            🕉️ Srila Prabhupad Vani
-          </h1>
-          <p className="text-orange-600">Spiritual Audio Teachings</p>
-        </header>
-
-        <div className="grid md:grid-cols-3 gap-6">
-          <div className={`${showPlaylist ? 'md:col-span-2' : 'md:col-span-3'}`}>
-            <div className="bg-white rounded-xl shadow-xl overflow-hidden">
-              <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-8 text-white">
-                <h2 className="text-2xl font-bold mb-2 truncate">
-                  {playlist[currentTrack]?.title || 'No track selected'}
-                </h2>
-                <p className="text-orange-100">Track {currentTrack + 1} of {playlist.length}</p>
-              </div>
-
-              <div className="p-8">
-                <audio ref={audioRef} src={playlist[currentTrack]?.link} />
-
-                <div className="mb-6">
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={(currentTime / duration) * 100 || 0}
-                    onChange={handleSeek}
-                    className="w-full h-2 bg-orange-200 rounded-lg appearance-none cursor-pointer"
-                    style={{
-                      background: `linear-gradient(to right, #ea580c ${(currentTime / duration) * 100}%, #fed7aa ${(currentTime / duration) * 100}%)`
-                    }}
-                  />
-                  <div className="flex justify-between mt-2 text-sm text-gray-600">
-                    <span>{formatTime(currentTime)}</span>
-                    <span>{formatTime(duration)}</span>
-                  </div>
+    renderLectures(lectures, containerId) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        
+        if (lectures.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-search"></i>
+                    <h3>No lectures found</h3>
+                    <p>Try adjusting your search or filters</p>
                 </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = lectures.map(lecture => this.createLectureElement(lecture)).join('');
+        
+        // Add click handlers to play buttons
+        container.querySelectorAll('.play-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const index = parseInt(btn.dataset.index);
+                this.playLecture(lectures[index]);
+            });
+        });
+        
+        // Add click handlers to favorite buttons
+        container.querySelectorAll('.favorite-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const index = parseInt(btn.dataset.index);
+                this.toggleFavorite(lectures[index]);
+            });
+        });
+        
+        // Add click handlers to entire lecture item
+        container.querySelectorAll('.lecture-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                if (!e.target.classList.contains('play-btn') && 
+                    !e.target.classList.contains('favorite-btn') &&
+                    !e.target.closest('.play-btn') &&
+                    !e.target.closest('.favorite-btn')) {
+                    const index = parseInt(item.dataset.index);
+                    this.playLecture(lectures[index]);
+                }
+            });
+        });
+    }
 
-                <div className="flex items-center justify-center gap-6 mb-6">
-                  <button
-                    onClick={playPrevious}
-                    className="p-3 bg-orange-100 rounded-full hover:bg-orange-200 transition"
-                  >
-                    <SkipBack className="w-6 h-6 text-orange-600" />
-                  </button>
-                  
-                  <button
-                    onClick={togglePlay}
-                    className="p-6 bg-orange-600 rounded-full hover:bg-orange-700 transition shadow-lg"
-                  >
-                    {isPlaying ? (
-                      <Pause className="w-8 h-8 text-white" />
-                    ) : (
-                      <Play className="w-8 h-8 text-white ml-1" />
-                    )}
-                  </button>
-                  
-                  <button
-                    onClick={playNext}
-                    className="p-3 bg-orange-100 rounded-full hover:bg-orange-200 transition"
-                  >
-                    <SkipForward className="w-6 h-6 text-orange-600" />
-                  </button>
+    createLectureElement(lecture) {
+        const index = this.filteredLectures.indexOf(lecture);
+        const isPlaying = this.currentLecture === lecture;
+        const isFavorited = this.favorites.has(lecture.link);
+        const date = new Date(lecture.date);
+        const formattedDate = date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+        });
+        
+        return `
+            <div class="lecture-item ${isPlaying ? 'playing' : ''}" data-index="${index}">
+                <div class="lecture-title">${lecture.title}</div>
+                <div class="lecture-meta">
+                    <span><i class="far fa-calendar"></i> ${formattedDate}</span>
+                    <span><i class="fas fa-map-marker-alt"></i> ${lecture.location || 'Unknown'}</span>
                 </div>
-
-                <div className="flex items-center gap-3">
-                  <Volume2 className="w-5 h-5 text-orange-600" />
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={volume * 100}
-                    onChange={(e) => setVolume(e.target.value / 100)}
-                    className="flex-1 h-2 bg-orange-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowPlaylist(!showPlaylist)}
-              className="md:hidden mt-4 w-full bg-orange-600 text-white py-3 rounded-lg hover:bg-orange-700 transition flex items-center justify-center gap-2"
-            >
-              <List className="w-5 h-5" />
-              {showPlaylist ? 'Hide Playlist' : 'Show Playlist'}
-            </button>
-          </div>
-
-          <div className={`${showPlaylist ? 'block' : 'hidden md:block'}`}>
-            <div className="bg-white rounded-xl shadow-xl overflow-hidden h-[600px] flex flex-col">
-              <div className="p-4 bg-orange-50 border-b border-orange-100">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Search teachings..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 border border-orange-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto">
-                {filteredPlaylist.map((track, index) => {
-                  const actualIndex = playlist.findIndex(t => t.title === track.title);
-                  return (
-                    <button
-                      key={index}
-                      onClick={() => playTrack(actualIndex)}
-                      className={`w-full text-left p-4 hover:bg-orange-50 transition border-b border-gray-100 ${
-                        currentTrack === actualIndex ? 'bg-orange-100 border-l-4 border-l-orange-600' : ''
-                      }`}
-                    >
-                      <div className="font-medium text-gray-800 text-sm line-clamp-2">
-                        {track.title}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Track {actualIndex + 1}
-                      </div>
+                <div class="lecture-actions">
+                    <button class="play-btn" data-index="${index}">
+                        <i class="fas fa-${isPlaying ? 'pause' : 'play'}"></i>
+                        ${isPlaying ? 'Playing' : 'Play'}
                     </button>
-                  );
-                })}
-              </div>
+                    <button class="favorite-btn ${isFavorited ? 'favorited' : ''}" data-index="${index}">
+                        <i class="fas fa-heart"></i>
+                    </button>
+                </div>
             </div>
-          </div>
-        </div>
+        `;
+    }
 
-        <footer className="text-center mt-8 text-gray-600 text-sm">
-          <p>🙏 Hare Krishna 🙏</p>
-        </footer>
-      </div>
-    </div>
-  );
-};
+    renderAllLectures() {
+        this.renderLectures(this.filteredLectures, 'all-list');
+    }
 
-export default MusicPlayer;
+    playLecture(lecture) {
+        this.currentLecture = lecture;
+        const audioPlayer = document.getElementById('audio-player');
+        
+        // Update audio source
+        audioPlayer.src = lecture.link;
+        
+        // Update UI
+        document.getElementById('current-title').textContent = lecture.title;
+        document.getElementById('current-details').innerHTML = `
+            <div><i class="far fa-calendar"></i> ${new Date(lecture.date).toLocaleDateString()}</div>
+            <div><i class="fas fa-map-marker-alt"></i> ${lecture.location || 'Unknown location'}</div>
+        `;
+        
+        // Play audio
+        audioPlayer.play().catch(e => {
+            console.error('Error playing audio:', e);
+            alert('Unable to play audio. The file might not be accessible.');
+        });
+        
+        // Update lecture items
+        this.updatePlayingState();
+        
+        // Scroll to player
+        document.querySelector('.player-section').scrollIntoView({ 
+            behavior: 'smooth',
+            block: 'start'
+        });
+    }
+
+    togglePlayPause() {
+        const audioPlayer = document.getElementById('audio-player');
+        
+        if (this.isPlaying) {
+            audioPlayer.pause();
+        } else {
+            if (audioPlayer.src) {
+                audioPlayer.play();
+            } else if (this.filteredLectures.length > 0) {
+                this.playLecture(this.filteredLectures[0]);
+            }
+        }
+    }
+
+    playNext() {
+        if (!this.currentLecture || this.filteredLectures.length === 0) return;
+        
+        const currentIndex = this.filteredLectures.indexOf(this.currentLecture);
+        const nextIndex = (currentIndex + 1) % this.filteredLectures.length;
+        
+        this.playLecture(this.filteredLectures[nextIndex]);
+    }
+
+    playPrevious() {
+        if (!this.currentLecture || this.filteredLectures.length === 0) return;
+        
+        const currentIndex = this.filteredLectures.indexOf(this.currentLecture);
+        const prevIndex = (currentIndex - 1 + this.filteredLectures.length) % this.filteredLectures.length;
+        
+        this.playLecture(this.filteredLectures[prevIndex]);
+    }
+
+    toggleRepeat() {
+        this.repeatMode = !this.repeatMode;
+        const repeatBtn = document.getElementById('repeat-btn');
+        repeatBtn.classList.toggle('active', this.repeatMode);
+    }
+
+    toggleFavorite(lecture) {
+        if (this.favorites.has(lecture.link)) {
+            this.favorites.delete(lecture.link);
+        } else {
+            this.favorites.add(lecture.link);
+        }
+        
+        this.saveFavorites();
+        this.updateFavoritesList();
+        this.updatePlayingState();
+    }
+
+    updateFavoritesList() {
+        const favoriteLectures = this.filteredLectures.filter(l => this.favorites.has(l.link));
+        const container = document.getElementById('favorites-list');
+        
+        if (favoriteLectures.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-heart"></i>
+                    <h3>No favorites yet</h3>
+                    <p>Click the heart icon on any lecture to add it to favorites</p>
+                </div>
+            `;
+        } else {
+            this.renderLectures(favoriteLectures, 'favorites-list');
+        }
+    }
+
+    updatePlayingState() {
+        // Update all lecture items
+        document.querySelectorAll('.lecture-item').forEach(item => {
+            const index = parseInt(item.dataset.index);
+            const lecture = this.filteredLectures[index];
+            
+            if (lecture) {
+                item.classList.toggle('playing', lecture === this.currentLecture);
+                
+                const playBtn = item.querySelector('.play-btn');
+                if (playBtn) {
+                    playBtn.innerHTML = `
+                        <i class="fas fa-${lecture === this.currentLecture && this.isPlaying ? 'pause' : 'play'}"></i>
+                        ${lecture === this.currentLecture && this.isPlaying ? 'Playing' : 'Play'}
+                    `;
+                }
+                
+                const favoriteBtn = item.querySelector('.favorite-btn');
+                if (favoriteBtn) {
+                    favoriteBtn.classList.toggle('favorited', this.favorites.has(lecture.link));
+                }
+            }
+        });
+    }
+
+    updatePlayButton() {
+        const playBtn = document.getElementById('play-pause-btn');
+        playBtn.innerHTML = `
+            <i class="fas fa-${this.isPlaying ? 'pause' : 'play'}"></i>
+        `;
+    }
+
+    saveFavorites() {
+        localStorage.setItem('prabhupadaFavorites', JSON.stringify([...this.favorites]));
+    }
+
+    loadFavorites() {
+        try {
+            const saved = localStorage.getItem('prabhupadaFavorites');
+            if (saved) {
+                this.favorites = new Set(JSON.parse(saved));
+            }
+        } catch (e) {
+            console.error('Error loading favorites:', e);
+        }
+    }
+}
+
+// Initialize the player when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    window.player = new PrabhupadaVaniPlayer();
+});
